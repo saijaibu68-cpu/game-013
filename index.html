@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AR English Speaking Game 🌟</title>
+
+    <!-- นำเข้า Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- นำเข้า Google Font 'Mitr' -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- นำเข้า MediaPipe Face Mesh และ Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    
+    <!-- นำเข้า canvas-confetti สำหรับจุดพลุ -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Mitr', sans-serif;
+            background: linear-gradient(135deg, #fdf2f8 0%, #ffedd5 100%); /* สีพาสเทลชมพู-ส้ม */
+            touch-action: none;
+            overflow: hidden;
+        }
+
+        /* Glassmorphism Effect */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            box-shadow: 0 8px 32px 0 rgba(255, 150, 150, 0.2);
+        }
+
+        /* Mirror Video & Canvas (ส่องกระจก) */
+        .mirror {
+            transform: scaleX(-1);
+        }
+
+        /* Vignette Effect (ขอบมืดเวลาตอบผิด) */
+        .vignette {
+            box-shadow: inset 0 0 150px rgba(0,0,0,0.9);
+            transition: box-shadow 0.5s ease;
+        }
+
+        /* อนิเมชั่นปุ่มและข้อความ */
+        .pulse { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .bounce { animation: bounce 1s infinite; }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .meter-fill {
+            transition: width 0.3s ease-out, background-color 0.3s ease;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col md:flex-row text-gray-800">
+
+    <div id="ui-panel" class="w-full md:w-1/2 h-1/2 md:h-full flex flex-col items-center justify-center p-4 relative z-10">
+        
+        <!-- แถบด้านบน: ข้อที่ และ คะแนน -->
+        <div class="absolute top-4 left-4 right-4 flex justify-between px-4 py-2 glass-panel rounded-2xl font-bold text-lg text-pink-600">
+            <div><i class="fa-solid fa-star text-yellow-400"></i> ข้อ: <span id="question-count">1/10</span></div>
+            <div>🏆 คะแนน: <span id="score-display">0</span></div>
+        </div>
+
+        <!-- กล่องคำศัพท์หลัก -->
+        <div class="glass-panel w-full max-w-sm rounded-3xl p-8 text-center mt-12 flex flex-col items-center justify-center min-h-[300px]">
+            
+            <!-- ป้ายสถานะ (เตรียมตัว, พูดเลย, ผลลัพธ์) -->
+            <div id="status-badge" class="px-6 py-2 rounded-full font-bold text-white mb-6 text-xl shadow-md bg-blue-400">
+                รอเริ่มเกม...
+            </div>
+
+            <div id="word-container" class="opacity-0 transition-opacity duration-500">
+                <h1 id="en-word" class="text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-orange-500 mb-2 drop-shadow-sm">Word</h1>
+                <h2 id="th-word" class="text-2xl font-medium text-gray-500 mb-8">คำแปล</h2>
+            </div>
+
+            <!-- เวลาที่เหลือสำหรับการพูด -->
+            <div id="timer-display" class="text-4xl font-bold text-pink-500 mb-4 hidden">5</div>
+
+            <!-- แถบความแม่นยำ (Meter Bar) -->
+            <div class="w-full bg-white rounded-full h-8 border-4 border-white shadow-inner overflow-hidden relative">
+                <div id="meter-bar" class="meter-fill h-full bg-gray-300 w-0 rounded-full flex items-center justify-end pr-2">
+                    <span id="meter-text" class="text-xs font-bold text-white shadow-sm">0%</span>
+                </div>
+            </div>
+            <p class="text-sm font-semibold text-gray-400 mt-2">ความแม่นยำ (เป้าหมาย 80%)</p>
+        </div>
+    </div>
+
+    <div id="camera-panel" class="w-full md:w-1/2 h-1/2 md:h-full bg-gray-900 relative overflow-hidden flex items-center justify-center shadow-inner">
+        <!-- Loader ระหว่างรอกล้อง -->
+        <div id="camera-loading" class="absolute z-20 text-white flex flex-col items-center">
+            <i class="fa-solid fa-spinner fa-spin text-4xl mb-4"></i>
+            <p>กำลังเตรียมเวทมนตร์ AR...</p>
+        </div>
+
+        <!-- วิดีโอต้นฉบับ (ซ่อนไว้ใช้เป็น Source ของ MediaPipe) -->
+        <video id="video-input" class="hidden" autoplay playsinline></video>
+        
+        <!-- Canvas สำหรับวาดภาพกล้องและ AR ทับ -->
+        <canvas id="output-canvas" class="w-full h-full object-cover mirror z-10"></canvas>
+
+        <!-- เอฟเฟกต์ขอบมืด (เปิดปิดผ่าน JS) -->
+        <div id="vignette-overlay" class="absolute inset-0 z-15 pointer-events-none"></div>
+    </div>
+
+    <div id="start-screen" class="absolute inset-0 z-50 flex items-center justify-center bg-white/80 backdrop-blur-sm">
+        <div class="glass-panel p-10 rounded-3xl text-center max-w-lg mx-4">
+            <h1 class="text-5xl font-extrabold text-pink-500 mb-4 bounce">AR English<br><span class="text-orange-400 text-3xl">Speaking Game</span></h1>
+            <p class="text-lg text-gray-600 mb-6 font-medium">เกมฝึกพูดภาษาอังกฤษแสนสนุก!<br>ระบบต้องการอนุญาตใช้ "ไมโครโฟน" และ "กล้อง"</p>
+            
+            <div class="text-left bg-white/60 p-4 rounded-xl mb-8 text-sm text-gray-700">
+                <p>✨ <b>กติกา:</b></p>
+                <p>1. พูดคำศัพท์ภาษาอังกฤษให้ชัดเจน</p>
+                <p>2. ความแม่นยำ 80% ขึ้นไป = ได้มงกุฎ! 👑</p>
+                <p>3. ถ้าพูดผิดหรือเพี้ยน = ระวังปีศาจโผล่! 😈</p>
+            </div>
+
+            <button id="btn-start" class="bg-gradient-to-r from-pink-400 to-orange-400 hover:from-pink-500 hover:to-orange-500 text-white font-bold py-4 px-12 rounded-full text-2xl shadow-lg transition transform hover:scale-105 pulse">
+                เริ่มเล่นเลย! <i class="fa-solid fa-play ml-2"></i>
+            </button>
+        </div>
+    </div>
+
+    <div id="end-screen" class="absolute inset-0 z-50 hidden flex items-center justify-center bg-black/60 backdrop-blur-md">
+        <div class="glass-panel p-10 rounded-3xl text-center max-w-md mx-4 bg-white/90">
+            <h1 class="text-5xl font-extrabold text-pink-500 mb-2">จบเกม!</h1>
+            <div id="end-emoji" class="text-6xl mb-4">🎉</div>
+            <p class="text-2xl text-gray-700 mb-2 font-bold">คุณทำคะแนนได้</p>
+            <p class="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-blue-500 mb-8"><span id="final-score">0</span>/10</p>
+            
+            <p id="end-message" class="text-lg text-gray-600 mb-8 font-medium">เก่งมากๆ เลย!</p>
+
+            <button id="btn-restart" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-full text-xl shadow-lg transition transform hover:scale-105">
+                <i class="fa-solid fa-rotate-right mr-2"></i> เล่นใหม่อีกครั้ง
+            </button>
+        </div>
+    </div>
+
+    <div id="error-screen" class="absolute inset-0 z-[60] hidden flex items-center justify-center bg-red-500/90 backdrop-blur-md text-white text-center p-8">
+        <div class="max-w-md">
+            <i class="fa-solid fa-triangle-exclamation text-6xl mb-4"></i>
+            <h2 class="text-3xl font-bold mb-4">อุ๊ย! เกิดข้อผิดพลาด</h2>
+            <p id="error-message" class="text-lg mb-6">เบราว์เซอร์ของคุณไม่รองรับ หรือคุณยังไม่ได้อนุญาตการเข้าถึงกล้อง/ไมค์</p>
+            <button onclick="location.reload()" class="bg-white text-red-500 font-bold py-2 px-6 rounded-full">รีเฟรชหน้าเว็บ</button>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. ข้อมูลคำศัพท์ (Vocabulary) ---
+        const wordsList = [
+            { en: "Apple", th: "แอปเปิ้ล" },
+            { en: "Banana", th: "กล้วย" },
+            { en: "Elephant", th: "ช้าง" },
+            { en: "Tiger", th: "เสือ" },
+            { en: "Watermelon", th: "แตงโม" },
+            { en: "Butterfly", th: "ผีเสื้อ" },
+            { en: "Rainbow", th: "รุ้งกินน้ำ" },
+            { en: "Dinosaur", th: "ไดโนเสาร์" },
+            { en: "Computer", th: "คอมพิวเตอร์" },
+            { en: "Strawberry", th: "สตรอว์เบอร์รี" }
+        ];
+
+        // --- 2. ตัวแปร State ของเกม ---
+        let currentWordIndex = 0;
+        let score = 0;
+        let audioCtx; // Web Audio API Context
+        let recognition; // Web Speech API
+        let isListening = false;
+        let gameActive = false;
+        let countdownInterval;
+        let listenTimeout;
+
+        // AR State
+        let showCrown = false;
+        let showHorns = false;
+        let faceLandmarks = null; // เก็บข้อมูลใบหน้าเฟรมล่าสุด
+
+        // Elements
+        const uiWordContainer = document.getElementById('word-container');
+        const uiEnWord = document.getElementById('en-word');
+        const uiThWord = document.getElementById('th-word');
+        const uiStatusBadge = document.getElementById('status-badge');
+        const uiMeterBar = document.getElementById('meter-bar');
+        const uiMeterText = document.getElementById('meter-text');
+        const uiQuestionCount = document.getElementById('question-count');
+        const uiScoreDisplay = document.getElementById('score-display');
+        const uiTimerDisplay = document.getElementById('timer-display');
+        const vignetteOverlay = document.getElementById('vignette-overlay');
+
+        // --- 3. ระบบ Audio Synthesizer (Web Audio API) ---
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+        }
+
+        function playSynth(type, freq, duration, vol = 0.1, freqSlide = null) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            
+            if (freqSlide) {
+                osc.frequency.exponentialRampToValueAtTime(freqSlide, audioCtx.currentTime + duration);
+            }
+
+            gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        const Sound = {
+            click: () => playSynth('sine', 800, 0.1, 0.1),
+            tick: () => playSynth('triangle', 600, 0.1, 0.05),
+            go: () => playSynth('square', 1000, 0.3, 0.1),
+            correct: () => {
+                playSynth('sine', 600, 0.2, 0.1);
+                setTimeout(() => playSynth('sine', 800, 0.3, 0.1), 100);
+                setTimeout(() => playSynth('sine', 1200, 0.5, 0.1), 200);
+            },
+            wrong: () => playSynth('sawtooth', 150, 0.5, 0.1, 100),
+            warning: () => playSynth('square', 400, 0.3, 0.1),
+            fanfare: () => {
+                [523, 659, 783, 1046].forEach((f, i) => {
+                    setTimeout(() => playSynth('sine', f, 0.4, 0.1), i * 150);
+                });
+            },
+            gameover: () => playSynth('triangle', 300, 1, 0.1, 100)
+        };
+
+        // --- 4. ระบบเปรียบเทียบความเหมือนของข้อความ (Levenshtein Distance) ---
+        function editDistance(s1, s2) {
+            s1 = s1.toLowerCase();
+            s2 = s2.toLowerCase();
+            let costs = [];
+            for (let i = 0; i <= s1.length; i++) {
+                let lastValue = i;
+                for (let j = 0; j <= s2.length; j++) {
+                    if (i == 0) costs[j] = j;
+                    else {
+                        if (j > 0) {
+                            let newValue = costs[j - 1];
+                            if (s1.charAt(i - 1) != s2.charAt(j - 1))
+                                newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+                            costs[j - 1] = lastValue;
+                            lastValue = newValue;
+                        }
+                    }
+                }
+                if (i > 0) costs[s2.length] = lastValue;
+            }
+            return costs[s2.length];
+        }
+
+        function getSimilarity(s1, s2) {
+            let longer = s1;
+            let shorter = s2;
+            if (s1.length < s2.length) { longer = s2; shorter = s1; }
+            let longerLength = longer.length;
+            if (longerLength == 0) return 1.0;
+            return (longerLength - editDistance(longer, shorter)) / parseFloat(longerLength);
+        }
+
+        // --- 5. ตั้งค่า Web Speech API ---
+        function setupSpeechRecognition() {
+            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRec) {
+                showError("เบราว์เซอร์ของคุณไม่รองรับระบบสั่งงานด้วยเสียง (แนะนำให้ใช้ Google Chrome)");
+                return false;
+            }
+
+            recognition = new SpeechRec();
+            recognition.lang = 'en-US'; // เน้นฟังภาษาอังกฤษ
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            recognition.onresult = (event) => {
+                isListening = false;
+                clearTimeout(listenTimeout);
+                uiTimerDisplay.classList.add('hidden');
+                
+                const spokenWord = event.results[0][0].transcript;
+                console.log("ได้ยินคำว่า:", spokenWord);
+                processResult(spokenWord);
+            };
+
+            recognition.onspeechend = () => {
+                recognition.stop();
+            };
+
+            recognition.onerror = (event) => {
+                isListening = false;
+                clearTimeout(listenTimeout);
+                uiTimerDisplay.classList.add('hidden');
+                
+                if (event.error === 'no-speech') {
+                    handleNoSpeech();
+                } else {
+                    console.error("Speech error:", event.error);
+                }
+            };
+            return true;
+        }
+
+        // --- 6. ตั้งค่า MediaPipe & Canvas (AR) ---
+        const videoElement = document.getElementById('video-input');
+        const canvasElement = document.getElementById('output-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        function onMediaPipeResults(results) {
+            // ปรับขนาด Canvas ให้เท่ากับ Video
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            // วาดภาพจากกล้องลง Canvas
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                faceLandmarks = results.multiFaceLandmarks[0];
+                
+                // ถ้าระบบสั่งให้วาด AR
+                if (showCrown) drawCrown(faceLandmarks);
+                if (showHorns) drawHorns(faceLandmarks);
+            }
+            canvasCtx.restore();
+
+            // ซ่อน Loader เมื่อกล้องเริ่มทำงานครั้งแรก
+            const loader = document.getElementById('camera-loading');
+            if (loader && !loader.classList.contains('hidden')) {
+                loader.classList.add('hidden');
+            }
+        }
+
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        faceMesh.onResults(onMediaPipeResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await faceMesh.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+
+        // ฟังก์ชันวาด AR: มงกุฎ
+        function drawCrown(landmarks) {
+            // จุด 10 คือบริเวณหน้าผากบนสุด, จุด 152 คือคาง (เพื่อหาความสูงหน้า)
+            const topHead = landmarks[10];
+            const bottomChin = landmarks[152];
+            
+            const x = topHead.x * canvasElement.width;
+            const y = topHead.y * canvasElement.height;
+            const faceHeight = (bottomChin.y - topHead.y) * canvasElement.height;
+            const crownSize = faceHeight * 0.8; // ขยาดสัมพันธ์กับหน้า
+
+            canvasCtx.fillStyle = '#FFD700'; // สีทอง
+            canvasCtx.strokeStyle = '#DAA520';
+            canvasCtx.lineWidth = 3;
+            
+            // วาดมงกุฎ
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(x - crownSize/2, y);
+            canvasCtx.lineTo(x - crownSize/2, y - crownSize * 0.6); // ยอดซ้าย
+            canvasCtx.lineTo(x - crownSize/4, y - crownSize * 0.3);
+            canvasCtx.lineTo(x, y - crownSize * 0.7);               // ยอดกลาง
+            canvasCtx.lineTo(x + crownSize/4, y - crownSize * 0.3);
+            canvasCtx.lineTo(x + crownSize/2, y - crownSize * 0.6); // ยอดขวา
+            canvasCtx.lineTo(x + crownSize/2, y);
+            canvasCtx.closePath();
+            canvasCtx.fill();
+            canvasCtx.stroke();
+
+            // ประดับเพชร
+            canvasCtx.fillStyle = '#FF00FF';
+            canvasCtx.beginPath(); canvasCtx.arc(x, y - crownSize*0.5, crownSize*0.1, 0, Math.PI*2); canvasCtx.fill();
+        }
+
+        // ฟังก์ชันวาด AR: เขาปีศาจ
+        function drawHorns(landmarks) {
+            // จุดบริเวณซ้ายขวาของหน้าผาก (ประมาณจุด 21 และ 251)
+            const leftHead = landmarks[21];
+            const rightHead = landmarks[251];
+            const bottomChin = landmarks[152];
+
+            const faceHeight = (bottomChin.y - landmarks[10].y) * canvasElement.height;
+            const hornSize = faceHeight * 0.4;
+
+            canvasCtx.fillStyle = '#FF0000'; // สีแดง
+            canvasCtx.strokeStyle = '#8B0000';
+            canvasCtx.lineWidth = 2;
+
+            // เขาซ้าย
+            const lx = leftHead.x * canvasElement.width;
+            const ly = leftHead.y * canvasElement.height;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(lx, ly);
+            canvasCtx.quadraticCurveTo(lx - hornSize/2, ly - hornSize, lx + hornSize/3, ly - hornSize*1.2);
+            canvasCtx.lineTo(lx + hornSize/2, ly);
+            canvasCtx.fill(); canvasCtx.stroke();
+
+            // เขาขวา
+            const rx = rightHead.x * canvasElement.width;
+            const ry = rightHead.y * canvasElement.height;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(rx, ry);
+            canvasCtx.quadraticCurveTo(rx + hornSize/2, ry - hornSize, rx - hornSize/3, ry - hornSize*1.2);
+            canvasCtx.lineTo(rx - hornSize/2, ry);
+            canvasCtx.fill(); canvasCtx.stroke();
+        }
+
+
+        // --- 7. Game Logic (วงจรของเกม) ---
+        function startGame() {
+            initAudio();
+            Sound.click();
+            
+            // เริ่มต้นกล้อง
+            camera.start().catch(err => {
+                showError("ไม่สามารถเข้าถึงกล้องได้ กรุณาตรวจสอบการอนุญาต");
+            });
+
+            if (!setupSpeechRecognition()) return;
+
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('end-screen').classList.add('hidden');
+            
+            score = 0;
+            currentWordIndex = 0;
+            uiScoreDisplay.innerText = score;
+            gameActive = true;
+
+            setTimeout(playNextWord, 1000);
+        }
+
+        function playNextWord() {
+            if (currentWordIndex >= wordsList.length) {
+                endGame();
+                return;
+            }
+
+            // ล้างผลลัพธ์เดิม
+            showCrown = false;
+            showHorns = false;
+            vignetteOverlay.classList.remove('vignette');
+            resetMeter();
+            
+            // ดึงคำศัพท์
+            const word = wordsList[currentWordIndex];
+            uiEnWord.innerText = word.en;
+            uiThWord.innerText = word.th;
+            uiQuestionCount.innerText = `${currentWordIndex + 1}/${wordsList.length}`;
+            
+            uiWordContainer.classList.remove('opacity-0');
+            
+            startCountdown();
+        }
+
+        function startCountdown() {
+            let count = 3;
+            updateBadge(`เตรียมตัว... ${count}`, 'bg-yellow-400');
+            Sound.tick();
+
+            countdownInterval = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    updateBadge(`เตรียมตัว... ${count}`, 'bg-yellow-400');
+                    Sound.tick();
+                } else {
+                    clearInterval(countdownInterval);
+                    startListening();
+                }
+            }, 1000);
+        }
+
+        function startListening() {
+            updateBadge("🎙️ พูดเลย!", 'bg-blue-500');
+            Sound.go();
+            
+            try {
+                recognition.start();
+                isListening = true;
+            } catch(e) {
+                console.error("Mic error", e);
+            }
+
+            // นับเวลาให้พูด 5 วินาที
+            let timeLeft = 5;
+            uiTimerDisplay.innerText = timeLeft;
+            uiTimerDisplay.classList.remove('hidden');
+
+            listenTimeout = setInterval(() => {
+                timeLeft--;
+                uiTimerDisplay.innerText = timeLeft;
+                if (timeLeft <= 0) {
+                    clearInterval(listenTimeout);
+                    if(isListening) {
+                        recognition.stop(); // สั่งหยุด, ถ้าไม่ได้ยินเสียง onerror(no-speech) จะทำงาน
+                    }
+                }
+            }, 1000);
+        }
+
+        function processResult(spokenText) {
+            const targetWord = wordsList[currentWordIndex].en;
+            const accuracy = getSimilarity(spokenText, targetWord) * 100;
+            const accPercent = Math.min(Math.max(Math.round(accuracy), 0), 100);
+
+            // อัปเดตแถบ
+            uiMeterBar.style.width = `${accPercent}%`;
+            uiMeterText.innerText = `${accPercent}%`;
+
+            if (accPercent >= 80) {
+                // ผ่าน!
+                Sound.correct();
+                updateBadge("🎉 ยอดเยี่ยม!", 'bg-green-500');
+                uiMeterBar.classList.add('bg-green-500');
+                uiMeterBar.classList.remove('bg-gray-300');
+                
+                score++;
+                uiScoreDisplay.innerText = score;
+                
+                // แสดง AR มงกุฎ และจุดพลุ
+                showCrown = true;
+                triggerConfetti();
+                
+            } else {
+                // ไม่ผ่าน
+                Sound.wrong();
+                updateBadge(`ได้ยินว่า: "${spokenText}"`, 'bg-red-500');
+                uiMeterBar.classList.add('bg-red-500');
+                uiMeterBar.classList.remove('bg-gray-300');
+                
+                // แสดง AR เขาปีศาจ และขอบมืด
+                showHorns = true;
+                vignetteOverlay.classList.add('vignette');
+            }
+
+            // หน่วงเวลา 3 วินาทีก่อนไปข้อถัดไป
+            setTimeout(() => {
+                uiWordContainer.classList.add('opacity-0');
+                currentWordIndex++;
+                setTimeout(playNextWord, 500);
+            }, 3000);
+        }
+
+        function handleNoSpeech() {
+            Sound.warning();
+            updateBadge("🤔 ไม่ได้ยินเสียง เอาใหม่นะ", 'bg-orange-500');
+            
+            // หน่วงเวลา 2 วินาที แล้วเริ่มข้อเดิมใหม่
+            setTimeout(() => {
+                startCountdown();
+            }, 2000);
+        }
+
+        function endGame() {
+            gameActive = false;
+            document.getElementById('end-screen').classList.remove('hidden');
+            document.getElementById('final-score').innerText = score;
+            
+            const msgEl = document.getElementById('end-message');
+            const emojiEl = document.getElementById('end-emoji');
+            
+            if (score >= 8) {
+                Sound.fanfare();
+                msgEl.innerText = "หนูคืออัจฉริยะภาษาอังกฤษ! สำเนียงเป๊ะมาก!";
+                emojiEl.innerText = "🏆";
+                triggerConfetti(200);
+            } else if (score >= 5) {
+                Sound.fanfare();
+                msgEl.innerText = "เก่งมากครับ พยายามอีกนิดนะ!";
+                emojiEl.innerText = "👍";
+            } else {
+                Sound.gameover();
+                msgEl.innerText = "ไม่เป็นไรนะ ฝึกฝนบ่อยๆ เดี๋ยวก็เก่ง!";
+                emojiEl.innerText = "💪";
+            }
+        }
+
+        // --- 8. Helper Functions เบ็ดเตล็ด ---
+        function updateBadge(text, colorClass) {
+            uiStatusBadge.innerText = text;
+            uiStatusBadge.className = `px-6 py-2 rounded-full font-bold text-white mb-6 text-xl shadow-md transition-colors ${colorClass}`;
+        }
+
+        function resetMeter() {
+            uiMeterBar.style.width = '0%';
+            uiMeterText.innerText = '0%';
+            uiMeterBar.className = 'meter-fill h-full bg-gray-300 w-0 rounded-full flex items-center justify-end pr-2';
+        }
+
+        function triggerConfetti(amount = 100) {
+            confetti({
+                particleCount: amount,
+                spread: 70,
+                origin: { y: 0.6 },
+                zIndex: 100
+            });
+        }
+
+        function showError(msg) {
+            document.getElementById('error-screen').classList.remove('hidden');
+            document.getElementById('error-message').innerText = msg;
+        }
+
+        // Binding Events
+        document.getElementById('btn-start').addEventListener('click', startGame);
+        document.getElementById('btn-restart').addEventListener('click', () => {
+            Sound.click();
+            document.getElementById('end-screen').classList.add('hidden');
+            // รีเซ็ตเพื่อเริ่มใหม่
+            currentWordIndex = 0;
+            score = 0;
+            uiScoreDisplay.innerText = score;
+            setTimeout(playNextWord, 500);
+        });
+
+    </script>
+</body>
+</html>
